@@ -6,12 +6,18 @@ Provider syntax: "provider", "provider:model", or "provider:model:reasoning"
   - openai                           (default model, no reasoning)
   - openai:gpt-realtime-1.5          (specific model)
   - openai:gpt-realtime-1.5:high     (model + reasoning effort)
+  - openai:pine-voice-preview        (Pine's OpenAI-compatible model)
   - livekit                           (default cascaded config)
   - livekit::openai-thinking          (default model + cascaded config)
+
+Pine models use the normal OpenAI provider syntax. Set ``PINE_API_KEY`` and
+``PINE_REALTIME_BASE_URL``; the OpenAI realtime provider selects them
+automatically for model names beginning with ``pine-``.
 
 Usage:
     python -m experiments.tau_voice.run_multiple --providers openai,gemini --save-to data/exp/my_run
     python -m experiments.tau_voice.run_multiple --providers openai:gpt-realtime-1.5:high --save-to data/exp/run --num-tasks 5
+    python -m experiments.tau_voice.run_multiple --providers openai:pine-voice-preview --save-to data/exp/pine
     python -m experiments.tau_voice.run_multiple --providers livekit,livekit::openai-thinking --save-to data/exp/run
 
 By default the grid runs sequentially, one `tau2 run` subprocess per combo.
@@ -23,6 +29,7 @@ run concurrently across N worker processes (see docs/designs/parallel-runner.md)
 """
 
 import argparse
+import json
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -96,13 +103,14 @@ def build_command(
     num_tasks: int | None = None,
     seed: int = DEFAULT_SEED,
     user_llm: str = DEFAULT_LLM_USER,
+    user_llm_args: dict | None = None,
     max_concurrency: int = 8,
     max_steps_seconds: int | None = None,
 ) -> list[str]:
     cmd = [
-        "uv",
-        "run",
-        "tau2",
+        sys.executable,
+        "-m",
+        "tau2.cli",
         "run",
         "--domain",
         domain,
@@ -125,6 +133,8 @@ def build_command(
         "--save-to",
         save_to,
     ]
+    if user_llm_args is not None:
+        cmd.extend(["--user-llm-args", json.dumps(user_llm_args)])
     if spec.reasoning_effort is not None:
         cmd.extend(["--reasoning-effort", spec.reasoning_effort])
     if spec.cascaded_config is not None:
@@ -145,6 +155,7 @@ def build_config(
     num_tasks: int | None = None,
     seed: int = DEFAULT_SEED,
     user_llm: str = DEFAULT_LLM_USER,
+    user_llm_args: dict | None = None,
     max_concurrency: int = 8,
     max_steps_seconds: int | None = None,
 ):
@@ -161,7 +172,7 @@ def build_config(
     if max_steps_seconds is not None:
         audio_kwargs["max_steps_seconds"] = max_steps_seconds
 
-    return VoiceRunConfig(
+    config_kwargs = dict(
         domain=domain,
         num_tasks=num_tasks,
         llm_user=user_llm,
@@ -174,6 +185,9 @@ def build_config(
         audio_native_config=AudioNativeConfig(**audio_kwargs),
         speech_complexity=complexity,
     )
+    if user_llm_args is not None:
+        config_kwargs["llm_args_user"] = user_llm_args
+    return VoiceRunConfig(**config_kwargs)
 
 
 def main():
@@ -207,6 +221,12 @@ def main():
     )
     parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
     parser.add_argument("--user-llm", type=str, default=DEFAULT_LLM_USER)
+    parser.add_argument(
+        "--user-llm-args",
+        type=json.loads,
+        default=None,
+        help="JSON object passed to the user simulator model.",
+    )
     parser.add_argument("--max-concurrency", type=int, default=8)
     parser.add_argument(
         "--save-to",
@@ -248,6 +268,7 @@ def main():
         num_tasks=args.num_tasks,
         seed=args.seed,
         user_llm=args.user_llm,
+        user_llm_args=args.user_llm_args,
         max_concurrency=args.max_concurrency,
         max_steps_seconds=args.max_steps_seconds,
     )
